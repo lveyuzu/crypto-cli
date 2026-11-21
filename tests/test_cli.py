@@ -223,9 +223,9 @@ class Introspection(unittest.TestCase):
                     self.assertEqual(out(r).rstrip("\n"), to_escaped(ex.decoded))
 
     def test_version_and_plugins(self):
-        self.assertIn("cryptix 0.1.0", out(run_cli("version")))
-        self.assertEqual(out(run_cli("-q", "version")).strip(), "0.1.0")
-        self.assertEqual(json.loads(out(run_cli("--json", "version")))["cryptix"], "0.1.0")
+        self.assertIn("cryptix 0.2.0", out(run_cli("version")))
+        self.assertEqual(out(run_cli("-q", "version")).strip(), "0.2.0")
+        self.assertEqual(json.loads(out(run_cli("--json", "version")))["cryptix"], "0.2.0")
         self.assertIn("builtin", out(run_cli("plugins")))
         self.assertEqual(json.loads(out(run_cli("--json", "plugins")))["load_errors"], [])
 

@@ -87,14 +87,14 @@ class HtmlEntities(Codec):
     )  # fmt: skip
 
     @staticmethod
-    def _text(data: bytes) -> str:
+    def _text(data: bytes, error: type[Exception] = DecodeError) -> str:
         try:
             return data.decode("utf-8")
         except UnicodeDecodeError as exc:
-            raise DecodeError(f"html operates on UTF-8 text: {exc}") from exc
+            raise error(f"html operates on UTF-8 text: {exc}") from exc
 
     def _encode(self, data: bytes, strict: bool, all: bool) -> bytes:
-        text = html.escape(self._text(data), quote=True)
+        text = html.escape(self._text(data, EncodeError), quote=True)
         if all:
             out = []
             for ch in text:
@@ -140,7 +140,11 @@ class QuotedPrintable(Codec):
 
     def detect(self, data: bytes) -> Detection | None:
         n = len(re.findall(rb"=[0-9A-F]{2}", data))
-        return Detection(min(0.85, 0.4 + 0.05 * n), f"{n} =XX sequence(s)") if n else None
+        soft = len(re.findall(rb"=\r?\n", data))
+        if not n and not soft:
+            return None
+        return Detection(min(0.85, 0.4 + 0.05 * n + 0.15 * min(soft, 2)),
+                         f"{n} =XX sequence(s), {soft} soft line break(s)")
 
 
 # ------------------------------------------------------------ unicode escapes
@@ -256,6 +260,7 @@ class Rot13(Codec):
         description="ROT13: letters rotated by 13; its own inverse.",
         input_type=DataKind.TEXT, output_type=DataKind.TEXT, reversible=True,
         auto_safe=True,
+        blind=True, self_inverse=True,
         detection_notes="Output is only plausible if it scores as text; no structural check.",
         examples=(Example(b"Uryyb", b"Hello"),),
     )  # fmt: skip
@@ -273,6 +278,7 @@ class Rot47(Codec):
         description="ROT47: rotate printable ASCII 0x21-0x7E by 47; its own inverse.",
         input_type=DataKind.TEXT, output_type=DataKind.TEXT, reversible=True,
         auto_safe=True,
+        blind=True, self_inverse=True,
         detection_notes="Printable ASCII without letters-only structure; no reliable check.",
         examples=(Example(b"w6==@", b"Hello"),),
     )  # fmt: skip
@@ -290,6 +296,7 @@ class Atbash(Codec):
         description="Atbash: A<->Z, B<->Y ... (letters only, case preserved); its own inverse.",
         input_type=DataKind.TEXT, output_type=DataKind.TEXT, reversible=True,
         auto_safe=True,
+        blind=True, self_inverse=True,
         examples=(Example(b"Svool", b"Hello"),),
     )  # fmt: skip
     _T = bytes(

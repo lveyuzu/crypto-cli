@@ -158,6 +158,13 @@ class PluginInfo:
     aliases: tuple[str, ...] = ()
     detection_notes: str = "No detection heuristic."
     examples: tuple[Example, ...] = ()
+    #: No structural signature exists: applicability can only be judged from the output's
+    #: quality. The auto-decoder tries blind transforms only on text that is not yet English
+    #: and keeps the result only if it clearly improves.
+    blind: bool = False
+    #: Applying the operation twice returns the input. The auto-decoder never applies such an
+    #: operation twice in a row (rot13 -> rot13 is a no-op; longer loops are caught by state dedup).
+    self_inverse: bool = False
 
     def resolve_params(self, given: Mapping[str, Any] | None) -> dict[str, Any]:
         """Validate, coerce and default *given* against the declared parameters."""

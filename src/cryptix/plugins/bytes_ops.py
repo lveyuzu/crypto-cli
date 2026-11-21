@@ -13,7 +13,7 @@ class Reverse(Codec):
         "characters (requires valid UTF-8, so multi-byte characters stay intact).",
         input_type=DataKind.BYTES, output_type=DataKind.BYTES, reversible=True,
         params=(Param("unit", ParamType.STR, "bytes", "bytes or chars.", choices=("bytes", "chars")),),
-        auto_safe=False,  # self-inverse: applying it twice is a no-op, so auto-search must not loop on it
+        auto_safe=True, blind=True, self_inverse=True,  # the engine never applies a self-inverse op twice
         examples=(Example(b"olleH", b"Hello"),),
     )  # fmt: skip
 

@@ -26,6 +26,7 @@ class Streams:
     stderr: TextIO
     stdin_tty: bool = False
     stdout_tty: bool = False
+    stderr_tty: bool = False
 
     @classmethod
     def from_process(cls) -> Streams:
@@ -35,6 +36,7 @@ class Streams:
             stderr=sys.stderr,
             stdin_tty=sys.stdin.isatty(),
             stdout_tty=sys.stdout.isatty(),
+            stderr_tty=sys.stderr.isatty(),
         )
 
 

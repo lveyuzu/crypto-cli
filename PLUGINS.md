@@ -38,7 +38,9 @@ class Shout(Codec):
 - `name`: `[a-z0-9][a-z0-9_.+-]*`, unique; `aliases` must not collide. `reversible` must equal "has both Encoder and Decoder".
 - Data is **bytes**. Never round-trip through `str` unless the operation is genuinely text-level (then require valid UTF-8 and say so).
 - Declare every parameter as a `Param` (`INT`, `STR`, `BOOL`, `BYTES`, optional `choices`). Add a `strict` BOOL if you tolerate sloppy input by default.
-- Set `cost` honestly (`TRIVIAL` ... `EXPENSIVE`). `auto_safe=True` only if the operation is cheap, cannot loop (self-inverse operations like `reverse` are *not* safe), and has a meaningful `detect()`.
+- Set `cost` honestly (`TRIVIAL` ... `EXPENSIVE`). `auto_safe=True` makes the operation eligible for `cryptix auto`; it must be cheap (`cost <= CHEAP`), take no required parameters, and either have a meaningful `detect()` or be declared `blind`.
+- `blind=True`: no structural signature exists (rot13, reverse...). `auto` then judges the operation only by whether its output looks better (more English-like, newly recognisable as an encoding, or gaining a file signature), and tries it only on text that is not yet English.
+- `self_inverse=True`: applying it twice is the identity. `auto` never applies it twice in a row.
 - `detect()` must be fast, side-effect free, never raise, and return a *calibrated* confidence: ambiguous formats (hex vs base64) should score low.
 - Bound resource use (output size, iterations); input is untrusted.
 - Provide at least one `Example`; `decode_only=True` when the encoder is not canonical.

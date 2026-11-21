@@ -79,3 +79,16 @@ class MagicDetector(Detector):
         if not findings and is_zlib_header(data):
             findings.append(Finding("zlib stream", 0.6, "valid RFC 1950 header"))
         return findings
+
+
+class EnglishScorer(Scorer):
+    info = PluginInfo(
+        name="english-frequency", category=Category.SCORING,
+        description="English plausibility (0..1): letter frequency, common words, bigram/trigram coverage.",
+        input_type=DataKind.BYTES, output_type=DataKind.STRUCTURED, cost=Cost.CHEAP,
+    )  # fmt: skip
+
+    def score(self, data: bytes) -> float:
+        from cryptix.search.language import english_score
+
+        return english_score(data)

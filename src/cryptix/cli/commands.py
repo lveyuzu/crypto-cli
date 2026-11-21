@@ -9,6 +9,7 @@ import binascii
 import platform
 import sys
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
 from typing import Any
 
 from cryptix import __version__
@@ -16,9 +17,11 @@ from cryptix.cli.chain import Step, parse_chain
 from cryptix.cli.context import Context
 from cryptix.cli.io import InputSpec, OutputSpec, emit, read_input
 from cryptix.cli.render import print_table
-from cryptix.core.data import to_escaped
+from cryptix.core.data import is_texty, parse_bytes_arg, to_escaped
 from cryptix.core.plugin import Category, Decoder, Encoder, Plugin, TransformResult
 from cryptix.errors import CryptixError, UsageError
+from cryptix.search.engine import AutoDecoder, Node, SearchConfig, SearchResult, SearchStats, explain_path, names_set, parse_size
+from cryptix.search.flags import FlagMatcher
 
 
 # ---------------------------------------------------------------- helpers
@@ -304,5 +307,155 @@ def cmd_version(ctx: Context) -> int:
         else:
             ctx.write_stdout(f"cryptix {__version__} (python {info['python']}, {info['platform']})\n".encode())
         return 0
+
+    return run_guarded(ctx, run)
+
+
+# -------------------------------------------------------------------- auto
+@dataclass
+class AutoArgs:
+    depth: int
+    beam: int
+    max_nodes: int
+    time_limit: float
+    max_output: str
+    strategy: str
+    top: int
+    min_score: float
+    min_confidence: float
+    flag_regex: Sequence[str] = field(default_factory=list)
+    flag_prefix: Sequence[str] = field(default_factory=list)
+    known: Sequence[str] = field(default_factory=list)
+    no_default_flags: bool = False
+    exhaustive: bool = False
+    only: Sequence[str] | None = None
+    exclude: Sequence[str] = field(default_factory=list)
+    explain: bool = False
+
+
+def _preview(data: bytes, width: int = 100) -> str:
+    if is_texty(data[:4096]):
+        s = data.decode("utf-8", "replace").replace("\r", "").replace("\n", "\\n")
+        return s if len(s) <= width else s[: width - 1] + "…"
+    return f"binary, first bytes: {data[:24].hex()}{'…' if len(data) > 24 else ''}"
+
+
+def _node_json(rank: int, n: Node, full_hex_limit: int = 1 << 20) -> dict[str, Any]:
+    d = n.data
+    try:
+        text: str | None = d.decode("utf-8")
+    except UnicodeDecodeError:
+        text = None
+    return {
+        "rank": rank,
+        "score": round(n.score.total, 4),
+        "depth": n.depth,
+        "chain": [{"op": s.op, "mode": s.mode, "confidence": round(s.confidence, 3),
+                   "in_len": s.in_len, "out_len": s.out_len, "evidence": s.evidence} for s in n.steps],
+        "chain_spec": n.chain_spec,
+        "flags": [{"kind": f.kind, "pattern": f.pattern, "text": f.text, "start": f.start, "end": f.end}
+                  for f in n.score.flags],
+        "signatures": list(n.score.signatures),
+        "hints": list(n.score.hints),
+        "score_parts": dict(n.score.parts),
+        "length": len(d),
+        "text": text,
+        "utf8_valid": text is not None,
+        "hex": d[:full_hex_limit].hex(),
+        "hex_truncated": len(d) > full_hex_limit,
+    }  # fmt: skip
+
+
+def _stats_json(s: SearchStats) -> dict[str, Any]:
+    return {"nodes_generated": s.nodes_generated, "nodes_expanded": s.nodes_expanded,
+            "decode_attempts": s.decode_attempts, "pruned": dict(s.pruned), "elapsed_s": round(s.elapsed, 4),
+            "stop_reason": s.stop_reason, "plugin_errors": s.plugin_errors}  # fmt: skip
+
+
+def _render_auto(ctx: Context, res: SearchResult, a: AutoArgs) -> str:
+    s = res.stats
+    lines = [f"searched {s.nodes_generated} states ({s.nodes_expanded} expanded, {s.decode_attempts} decode "
+             f"attempts) in {s.elapsed:.2f}s; stopped: {s.stop_reason}", ""]
+    shown = res.candidates[: a.top]
+    for i, n in enumerate(shown, 1):
+        best = n.score.flags[0] if n.score.flags else None
+        tag = f"  [{best.kind.upper()} MATCH]" if best else (f"  [{n.score.signatures[0]}]" if n.score.signatures else "")
+        lines.append(f"#{i}  score {n.score.total:.2f}  depth {n.depth}{tag}")
+        lines.append(f"    chain:   {' -> '.join(n.chain) or '(input is already plaintext)'}")
+        if n.chain:
+            lines.append(f"    replay:  cryptix chain '{n.chain_spec}' ...")
+        if best:
+            lines.append(f"    match:   {_preview(best.data, 200)}   ({best.pattern})")
+        lines.append(f"    output:  {len(n.data)} bytes: {_preview(n.data)}")
+        if n.score.hints:
+            lines.append(f"    hints:   {'; '.join(n.score.hints)}")
+        if a.explain:
+            lines += ["    why:"] + [f"      {x}" for x in explain_path(n)]
+            lines.append("      score: " + ", ".join(f"{k}={v}" for k, v in n.score.parts.items() if v))
+        lines.append("")
+    if len(res.candidates) > len(shown):
+        lines.append(f"({len(res.candidates) - len(shown)} more candidates; use --top N)")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def cmd_auto(ctx: Context, inp: InputSpec, out: OutputSpec, a: AutoArgs) -> int:
+    def run() -> int:
+        data = read_input(ctx, inp)
+        cfg = SearchConfig(
+            max_depth=a.depth, beam_width=a.beam, max_nodes=a.max_nodes, time_limit=a.time_limit,
+            max_output=parse_size(a.max_output), strategy=a.strategy, min_score=a.min_score,
+            min_confidence=a.min_confidence, stop_on_flag=not a.exhaustive,
+            only=names_set(a.only), exclude=names_set(a.exclude) or frozenset(),
+        )  # fmt: skip
+        matcher = FlagMatcher(a.flag_regex, a.flag_prefix, [parse_bytes_arg(k) for k in a.known],
+                              defaults=not a.no_default_flags)  # fmt: skip
+        show_progress = ctx.streams.stderr_tty and not ctx.opts.quiet and not ctx.opts.json
+
+        def progress(st: SearchStats, best: float) -> None:
+            ctx.streams.stderr.write(f"\rsearching... {st.nodes_generated} states, best score {best:.2f}   ")
+            ctx.streams.stderr.flush()
+
+        res = AutoDecoder(ctx.registry, cfg, matcher, progress if show_progress else None).run(data)
+        if show_progress:
+            ctx.streams.stderr.write("\r\033[K")
+        code = 130 if res.interrupted else 0
+        if res.interrupted:
+            ctx.warn("interrupted: showing results found so far")
+
+        best_flag = None
+        if res.flag_nodes:
+            node = max(res.flag_nodes, key=lambda n: n.score.total)
+            best_flag = (node, node.score.flags[0])
+
+        if ctx.opts.quiet:  # only the flag; nonzero exit if there is none
+            if best_flag is None:
+                return code or 1
+            ctx.write_stdout(best_flag[1].data + b"\n")
+            return code
+
+        top = best_flag[0] if best_flag else (res.candidates[0] if res.candidates else None)
+        if out.path or out.fmt:  # pipeline mode: emit the best candidate's bytes, report on stderr
+            if top is None:
+                ctx.error("no plausible decoding found")
+                return code or 1
+            emit(ctx, top.data, out)
+            if ctx.opts.verbose:
+                ctx.streams.stderr.write(_render_auto(ctx, res, a))
+            return code
+        if ctx.opts.json:
+            ctx.write_json({
+                "flag_found": best_flag is not None,
+                "stats": _stats_json(res.stats),
+                "candidates": [_node_json(i, n) for i, n in enumerate(res.candidates[: a.top], 1)],
+            })  # fmt: skip
+            return code or (0 if res.candidates else 1)
+        if not res.candidates:  # a diagnostic, not a result: stderr, with exit code 1 as the signal
+            ctx.streams.stderr.write(
+                f"cryptix: no plausible decoding found (searched {res.stats.nodes_generated} states "
+                f"in {res.stats.elapsed:.2f}s; stopped: {res.stats.stop_reason})\n"
+            )
+            return code or 1
+        ctx.write_stdout(_render_auto(ctx, res, a).encode("utf-8"))
+        return code
 
     return run_guarded(ctx, run)

@@ -73,11 +73,17 @@ class Hex(Codec):
 
     def detect(self, data: bytes) -> Detection | None:
         s = _ascii_stripped(data)
+        if not s:
+            return None
+        decorated = False
+        if re.search(r"(?i)0x|\\x|[:,\-\s]", s):  # notations the permissive decoder tolerates
+            s = re.sub(r"(?i)0x|\\x|[:,\-\s]", "", s)
+            decorated = True
         if not s or len(s) % 2 or not re.fullmatch(r"[0-9a-fA-F]+", s):
             return None
         if s.isdigit():
             return _det(0.25, "even-length decimal-digit string (also looks like base10)")
-        return _det(0.6, "even-length hexadecimal digits")
+        return _det(0.5 if decorated else 0.6, "even-length hexadecimal digits" + (" (with separators/prefixes)" if decorated else ""))
 
 
 # ------------------------------------------------------------- base2 / 8 / 10
@@ -287,7 +293,7 @@ class Base64(Codec):
 
     def detect(self, data: bytes) -> Detection | None:
         s = _ascii_stripped(data)
-        if not s:
+        if not s or " " in s or "\t" in s:  # wrapped base64 uses newlines; spaces mean prose
             return None
         s = re.sub(r"\s", "", s)
         if len(s) < 4 or not re.fullmatch(r"[A-Za-z0-9+/]+={0,2}", s) or len(s.rstrip("=")) % 4 == 1:
@@ -361,10 +367,10 @@ class Base32(Codec):
         s = _ascii_stripped(data)
         if not s or len(s) < 8 or not re.fullmatch(self._alpha() + r"+={0,6}", s):
             return None
-        if self._hex and re.fullmatch(r"[A-Z2-7]+={0,6}", s):
-            return None  # plain base32 is the better explanation
         if len(s) % 8:
             return None
+        if self._hex and re.fullmatch(r"[A-Z2-7]+={0,6}", s):
+            return _det(0.25, "base32hex alphabet, but every character also fits plain base32")
         return _det(0.75 if s.endswith("=") else 0.45, "base32 alphabet, length multiple of 8")
 
 
@@ -552,7 +558,7 @@ class Ascii85(Codec):
         s = data.strip()
         if s.startswith(b"<~") and s.endswith(b"~>"):
             return _det(0.95, "Adobe Ascii85 <~ ~> wrapper")
-        if len(s) >= 5 and all(33 <= b <= 117 or b in b" \t\r\n" for b in s) and re.search(rb"[^0-9A-Za-z]", s):
+        if len(s) >= 5 and all(33 <= b <= 117 or b in b"z \t\r\n" for b in s) and re.search(rb"[^0-9A-Za-z]", s):
             return _det(0.12, "characters within '!'..'u'")
         return None
 

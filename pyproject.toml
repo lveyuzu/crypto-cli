@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cryptix"
-version = "0.1.0"
+version = "0.2.0"
 description = "Extensible Linux CTF cryptanalysis and encoding-analysis toolkit"
 readme = "README.md"
 requires-python = ">=3.12"

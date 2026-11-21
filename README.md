@@ -2,9 +2,9 @@
 
 Extensible, terminal-native toolkit for CTF cryptography and encoding analysis on Linux.
 
-> **Status: Milestone 1 of 6.** The plugin architecture, byte-exact I/O, and 34 encoding/compression/cipher
-> operations work and are tested. The automatic decoder, solvers, XOR analysis, RSA and hash tools are
-> **not built yet**; see [ROADMAP.md](ROADMAP.md) for exactly what is and is not done.
+> **Status: Milestone 2 of 6.** The plugin architecture, byte-exact I/O, 35 operations and the **automatic
+> decoder (`cryptix auto`)** work and are tested. Classical-cipher solvers, XOR analysis, RSA, hash and
+> inspect tools are **not built yet**; see [ROADMAP.md](ROADMAP.md) for exactly what is and is not done.
 
 ## Install
 
@@ -28,6 +28,39 @@ python3 -m venv .venv && . .venv/bin/activate
 pip install -e '.[dev]'
 pytest                  # or: PYTHONPATH=src:tests python -m unittest discover -s tests
 ```
+
+## Automatic decoding
+
+```sh
+cryptix auto 'NjY2YzYxNjc3YjZjNjE3OTY1NzI3MzVmNmY2NjVmNjU2ZTYzNmY2NDY5NmU2NzdkMGE='                      # find the chain: prints ranked candidates
+cryptix auto --file challenge.txt --depth 8 --top 5
+cryptix -q auto --flag-prefix HTB --file blob.txt     # only the flag on stdout; exit 1 if none
+cryptix auto blob.txt -O raw > out.bin                # emit the best candidate's bytes (pipelines)
+cryptix auto x --known 'password is' --explain        # known plaintext, per-step evidence and score parts
+cryptix auto x --flag-regex 'corp-[0-9]{4}' --exhaustive --json
+```
+
+```
+$ cryptix auto 'NjY2YzYxNjc3YjZjNjE3OTY1NzI3MzVmNmY2NjVmNjU2ZTYzNmY2NDY5NmU2NzdkMGE='
+searched 7 states (2 expanded, 7 decode attempts) in 0.00s; stopped: flag found
+
+#1  score 8.47  depth 2  [KNOWN MATCH]
+    chain:   base64 -> hex
+    replay:  cryptix chain 'base64|hex' ...
+    match:   flag{layers_of_encoding}   (known-prefix{...})
+    output:  25 bytes: flag{layers_of_encoding}\n
+```
+
+How it works: a bounded best-first (or beam/BFS) search over states (bytes). Each decoder's `detect()` proposes
+applicable operations with a confidence; results are scored by layered, explainable heuristics (flag/known-plaintext
+match, text-ness, English plausibility, entropy, file signatures, decoder validity, chain length), deduplicated, and
+ranked. Only cheap, `auto_safe` operations are run implicitly. Limits: `--depth`, `--beam`, `--max-nodes`,
+`--time-limit`, `--max-output`; Ctrl+C prints what was found so far. Matches from `--flag-regex`, `--flag-prefix`,
+`--known` and the built-in `flag{...}`-style patterns stop the search at the first settled hit (`--exhaustive` continues).
+Exit codes: `0` a candidate was found (with `-q`: a flag), `1` nothing found.
+
+Measured on the synthetic corpus in `benchmarks/auto_corpus.py` (not real-world data; see ROADMAP caveats):
+every ordered pair of operations (1,893 chains) recovered, random 1-5 layer chains 99-100%, median 1-3 ms per search.
 
 ## Usage
 
